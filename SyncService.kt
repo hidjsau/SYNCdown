@@ -6,7 +6,6 @@ import android.app.NotificationManager
 import android.app.Service
 import android.content.ClipData
 import android.content.ClipboardManager
-import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.graphics.Color
@@ -25,55 +24,25 @@ import android.widget.TextView
 import android.widget.Toast
 import java.net.DatagramPacket
 import java.net.DatagramSocket
-import java.net.InetAddress
 import java.net.InetSocketAddress
-import java.net.NetworkInterface
-import java.util.UUID
 import kotlin.concurrent.thread
 
-object Net {
-    const val PORT = 48555
-    val myId: String = UUID.randomUUID().toString().substring(0, 8)
-
-    fun pin(ctx: Context): String =
-        ctx.getSharedPreferences("c", 0).getString("pin", "") ?: ""
-
-    fun send(ctx: Context, text: String) {
-        val pin = pin(ctx)
-        if (pin.length != 4) return
-        val t = if (text.length > 15000) text.substring(0, 15000) else text
-        val data = Crypto.enc(pin, "$myId|$t")
-        thread {
-            try {
-                val s = DatagramSocket()
-                s.broadcast = true
-                val targets = HashSet<InetAddress>()
-                targets.add(InetAddress.getByName("255.255.255.255"))
-                val ifs = NetworkInterface.getNetworkInterfaces()
-                while (ifs != null && ifs.hasMoreElements()) {
-                    val n = ifs.nextElement()
-                    if (!n.isUp || n.isLoopback) continue
-                    for (a in n.interfaceAddresses) a.broadcast?.let { targets.add(it) }
-                }
-                for (a in targets) {
-                    try {
-                        s.send(DatagramPacket(data, data.size, a, PORT))
-                    } catch (e: Exception) {
-                    }
-                }
-                s.close()
-            } catch (e: Exception) {
-            }
-        }
-    }
-}
-
 class SyncService : Service() {
+    companion object {
+        @Volatile
+        var on = false
+    }
+
     private var running = false
     private var sock: DatagramSocket? = null
     private var lock: WifiManager.MulticastLock? = null
     private var bubble: TextView? = null
     private val main = Handler(Looper.getMainLooper())
+
+    override fun onCreate() {
+        super.onCreate()
+        on = true
+    }
 
     override fun onBind(i: Intent?): IBinder? = null
 
@@ -87,8 +56,8 @@ class SyncService : Service() {
         val n = if (Build.VERSION.SDK_INT >= 26) Notification.Builder(this, "sync")
         else Notification.Builder(this)
         n.setContentTitle("ClipSync running")
-            .setSmallIcon(android.R.drawable.stat_notify_sync)
-            .setOngoing(true)
+        n.setSmallIcon(android.R.drawable.stat_notify_sync)
+        n.setOngoing(true)
         if (Build.VERSION.SDK_INT >= 29) {
             startForeground(1, n.build(), ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC)
         } else {
@@ -97,14 +66,29 @@ class SyncService : Service() {
         if (!running) {
             running = true
             val wm = applicationContext.getSystemService(WIFI_SERVICE) as WifiManager
-            lock = wm.createMulticastLock("clipsync").also {
-                it.setReferenceCounted(false)
-                it.acquire()
-            }
+            lock = wm.createMulticastLock("clipsync")
+            lock?.setReferenceCounted(false)
+            lock?.acquire()
             listen()
+            heartbeat()
         }
         showBubble()
         return START_STICKY
+    }
+
+    private fun heartbeat() {
+        thread {
+            while (running) {
+                val id = Net.myId(this)
+                for (p in Peers.list(this)) {
+                    Net.sendTo(p.pin, "H|$id|${Net.myName()}|")
+                }
+                try {
+                    Thread.sleep(8000)
+                } catch (e: InterruptedException) {
+                }
+            }
+        }
     }
 
     private fun listen() {
@@ -126,17 +110,37 @@ class SyncService : Service() {
     }
 
     private fun handle(data: ByteArray) {
-        val pin = Net.pin(this)
-        if (pin.length != 4) return
+        val pin = Net.myPin(this)
         val plain = Crypto.dec(pin, data) ?: return
-        val i = plain.indexOf('|')
-        if (i < 0) return
-        if (plain.substring(0, i) == Net.myId) return
-        val text = plain.substring(i + 1)
-        main.post {
-            val cm = getSystemService(CLIPBOARD_SERVICE) as ClipboardManager
-            cm.setPrimaryClip(ClipData.newPlainText("sync", text))
-            Toast.makeText(this, "Synced", Toast.LENGTH_SHORT).show()
+        val f = plain.split("|", limit = 4)
+        if (f.size < 4) return
+        val id = f[1]
+        if (id == Net.myId(this)) return
+        val name = f[2]
+        val rest = f[3]
+        val now = System.currentTimeMillis()
+        when (f[0]) {
+            "P" -> if (rest.length == 4) {
+                Peers.add(this, Peer(id, name, rest))
+                Peers.seen[id] = now
+                Net.sendTo(rest, "A|${Net.myId(this)}|${Net.myName()}|$pin")
+            }
+            "A" -> if (rest.length == 4) {
+                Peers.add(this, Peer(id, name, rest))
+                Peers.seen[id] = now
+            }
+            "H" -> if (Peers.has(this, id)) {
+                Peers.seen[id] = now
+            }
+            "T" -> if (Peers.has(this, id)) {
+                Peers.seen[id] = now
+                History.add(this, false, rest, name)
+                main.post {
+                    val cm = getSystemService(CLIPBOARD_SERVICE) as ClipboardManager
+                    cm.setPrimaryClip(ClipData.newPlainText("sync", rest))
+                    Toast.makeText(this, "Synced from $name", Toast.LENGTH_SHORT).show()
+                }
+            }
         }
     }
 
@@ -200,6 +204,7 @@ class SyncService : Service() {
 
     override fun onDestroy() {
         running = false
+        on = false
         sock?.close()
         lock?.release()
         bubble?.let {

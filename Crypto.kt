@@ -1,6 +1,7 @@
 package com.clipsync.app
 
 import java.security.SecureRandom
+import java.util.concurrent.ConcurrentHashMap
 import javax.crypto.Cipher
 import javax.crypto.SecretKeyFactory
 import javax.crypto.spec.GCMParameterSpec
@@ -8,24 +9,20 @@ import javax.crypto.spec.PBEKeySpec
 import javax.crypto.spec.SecretKeySpec
 
 object Crypto {
-    private var cachedPin = ""
-    private var cachedKey: SecretKeyFactoryKey? = null
-
-    private class SecretKeyFactoryKey(val key: SecretKeySpec)
+    private val cache = ConcurrentHashMap<String, SecretKeySpec>()
 
     private fun key(pin: String): SecretKeySpec {
-        val c = cachedKey
-        if (c != null && cachedPin == pin) return c.key
-        val spec = PBEKeySpec(pin.toCharArray(), "clipsync-v1".toByteArray(), 10000, 256)
+        cache[pin]?.let { return it }
+        val spec = PBEKeySpec(pin.toCharArray(), "clipsync-v2".toByteArray(), 10000, 256)
         val raw = SecretKeyFactory.getInstance("PBKDF2WithHmacSHA256").generateSecret(spec).encoded
         val k = SecretKeySpec(raw, "AES")
-        cachedPin = pin
-        cachedKey = SecretKeyFactoryKey(k)
+        cache[pin] = k
         return k
     }
 
     fun enc(pin: String, text: String): ByteArray {
-        val iv = ByteArray(12).also { SecureRandom().nextBytes(it) }
+        val iv = ByteArray(12)
+        SecureRandom().nextBytes(iv)
         val c = Cipher.getInstance("AES/GCM/NoPadding")
         c.init(Cipher.ENCRYPT_MODE, key(pin), GCMParameterSpec(128, iv))
         return iv + c.doFinal(text.toByteArray(Charsets.UTF_8))

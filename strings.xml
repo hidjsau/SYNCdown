@@ -1,0 +1,4 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="acc_desc">Detects when you tap Copy and automatically sends the copied text to your paired devices.</string>
+</resources>
