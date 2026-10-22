@@ -114,6 +114,8 @@ object History {
 
 object Net {
     const val PORT = 48555
+    @Volatile
+    var lastClip = ""
     private var lastText = ""
     private var lastTime = 0L
     private var cachedId: String? = null
@@ -173,6 +175,7 @@ object Net {
     fun sendTo(pin: String, plain: String) = broadcast(Crypto.enc(pin, plain))
 
     fun send(ctx: Context, text: String): Boolean {
+        lastClip = text
         val peers = Peers.list(ctx)
         if (peers.isEmpty()) return false
         val t = if (text.length > 15000) text.substring(0, 15000) else text

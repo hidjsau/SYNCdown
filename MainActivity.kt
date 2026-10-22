@@ -20,6 +20,7 @@ import android.widget.Button
 import android.widget.EditText
 import android.widget.LinearLayout
 import android.widget.ScrollView
+import android.widget.Switch
 import android.widget.TextView
 import android.widget.Toast
 import kotlin.concurrent.thread
@@ -63,6 +64,22 @@ class MainActivity : Activity() {
         root.addView(tv("ClipSync", 26f, true))
 
         permBox = card(root, "Permissions")
+
+        val bubbleCard = card(root, "Floating bubble")
+        val sw = Switch(this)
+        sw.text = "Show Sync bubble on screen"
+        sw.isChecked = getSharedPreferences("c", 0).getBoolean("bubble", false)
+        sw.setOnCheckedChangeListener { _, on ->
+            getSharedPreferences("c", 0).edit().putBoolean("bubble", on).apply()
+            if (on && !Settings.canDrawOverlays(this)) {
+                Toast.makeText(this, "Allow draw over apps first", Toast.LENGTH_SHORT).show()
+                startActivity(
+                    Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:$packageName"))
+                )
+            }
+            if (SyncService.on) startSvc()
+        }
+        bubbleCard.addView(sw)
 
         val pinCard = card(root, "My PIN")
         val pinView = tv(Net.myPin(this), 40f, true, 0xFF1976D2.toInt())
@@ -175,7 +192,7 @@ class MainActivity : Activity() {
 
     private fun refresh() {
         permBox.removeViews(1, permBox.childCount - 1)
-        permRow("Draw over apps", Settings.canDrawOverlays(this)) {
+        permRow("Draw over apps (only for bubble)", Settings.canDrawOverlays(this)) {
             startActivity(
                 Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:$packageName"))
             )

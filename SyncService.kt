@@ -1,6 +1,7 @@
 package com.clipsync.app
 
 import android.app.Notification
+import android.app.PendingIntent
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.Service
@@ -10,6 +11,7 @@ import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.graphics.Color
 import android.graphics.PixelFormat
+import android.graphics.drawable.Icon
 import android.graphics.drawable.GradientDrawable
 import android.net.wifi.WifiManager
 import android.os.Build
@@ -58,6 +60,20 @@ class SyncService : Service() {
         n.setContentTitle("ClipSync running")
         n.setSmallIcon(android.R.drawable.stat_notify_sync)
         n.setOngoing(true)
+        val sendPi = PendingIntent.getActivity(
+            this, 0,
+            Intent(this, SendActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+            PendingIntent.FLAG_IMMUTABLE
+        )
+        val openPi = PendingIntent.getActivity(
+            this, 1, Intent(this, MainActivity::class.java), PendingIntent.FLAG_IMMUTABLE
+        )
+        n.setContentIntent(openPi)
+        n.addAction(
+            Notification.Action.Builder(
+                Icon.createWithResource(this, R.drawable.ic_sync), "Send clipboard", sendPi
+            ).build()
+        )
         if (Build.VERSION.SDK_INT >= 29) {
             startForeground(1, n.build(), ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC)
         } else {
@@ -72,7 +88,7 @@ class SyncService : Service() {
             listen()
             heartbeat()
         }
-        showBubble()
+        if (getSharedPreferences("c", 0).getBoolean("bubble", false)) showBubble() else hideBubble()
         return START_STICKY
     }
 
@@ -134,6 +150,7 @@ class SyncService : Service() {
             }
             "T" -> if (Peers.has(this, id)) {
                 Peers.seen[id] = now
+                Net.lastClip = rest
                 History.add(this, false, rest, name)
                 main.post {
                     val cm = getSystemService(CLIPBOARD_SERVICE) as ClipboardManager
@@ -202,11 +219,7 @@ class SyncService : Service() {
         bubble = v
     }
 
-    override fun onDestroy() {
-        running = false
-        on = false
-        sock?.close()
-        lock?.release()
+    private fun hideBubble() {
         bubble?.let {
             try {
                 (getSystemService(WINDOW_SERVICE) as WindowManager).removeView(it)
@@ -214,6 +227,14 @@ class SyncService : Service() {
             }
         }
         bubble = null
+    }
+
+    override fun onDestroy() {
+        running = false
+        on = false
+        sock?.close()
+        lock?.release()
+        hideBubble()
         super.onDestroy()
     }
 }
